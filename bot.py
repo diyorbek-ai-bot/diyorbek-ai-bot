@@ -1,4 +1,6 @@
 import os
+import threading
+from flask import Flask
 from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
 from openai import OpenAI
@@ -6,15 +8,22 @@ from openai import OpenAI
 # ENV
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-OWNER_ID = int(os.getenv("OWNER_ID", "0"))  # crash bo‘lmasin
+OWNER_ID = int(os.getenv("OWNER_ID", "0"))
+if not OPENAI_API_KEY:
+    raise ValueError("OPENAI_API_KEY topilmadi")
 
-# OpenAI client
-client = OpenAI(api_key=OPENAI_API_KEY)
+client = OpenAI()
 
-# oddiy xotira
 memory = [
     {"role": "system", "content": "Sen faqat o‘zbek tilida gapiradigan aqlli yordamchisan."}
 ]
+
+# Flask (PORT uchun)
+web = Flask(__name__)
+
+@web.route("/")
+def home():
+    return "Bot ishlayapti 🚀"
 
 async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != OWNER_ID:
@@ -33,15 +42,20 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         answer = response.output_text
         memory.append({"role": "assistant", "content": answer})
 
+if len(memory) > 30:
+    memory[:] = memory[-30:]
+
         await update.message.reply_text(answer)
 
     except Exception as e:
         await update.message.reply_text("❌ Xatolik yuz berdi.")
         print("OpenAI error:", e)
 
-# App
-app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat))
+def run_bot():
+    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat))
+    app.run_polling()
 
-print("🤖 Bot ishga tushdi...")
-app.run_polling()
+if __name__ == "__main__":
+    threading.Thread(target=run_bot).start()
+    web.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
