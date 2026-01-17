@@ -1,54 +1,48 @@
 import os
-from flask import Flask, request
-from telegram import Update, Bot
+import threading
+from flask import Flask
+from telegram import Update
 from telegram.ext import (
-    Application,
     ApplicationBuilder,
     MessageHandler,
     ContextTypes,
     filters,
 )
 from openai import OpenAI
-import asyncio
 
-# ================== ENV ==================
+# ================= ENV =================
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OWNER_ID = int(os.getenv("OWNER_ID", "0"))
 PORT = int(os.getenv("PORT", "10000"))
 
 if not TELEGRAM_TOKEN:
-    raise ValueError("TELEGRAM_TOKEN topilmadi")
+    raise RuntimeError("TELEGRAM_TOKEN yo‘q")
 if not OPENAI_API_KEY:
-    raise ValueError("OPENAI_API_KEY topilmadi")
+    raise RuntimeError("OPENAI_API_KEY yo‘q")
 if OWNER_ID == 0:
-    raise ValueError("OWNER_ID noto‘g‘ri")
+    raise RuntimeError("OWNER_ID noto‘g‘ri")
 
-# ================== OPENAI ==================
+# ================= OPENAI =================
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-# ================== MEMORY (user-based) ==================
-user_memory: dict[int, list] = {}
-
+# ================= MEMORY =================
 SYSTEM_PROMPT = {
     "role": "system",
     "content": "Sen faqat o‘zbek tilida gapiradigan aqlli yordamchisan."
 }
-
+user_memory = {}
 MAX_HISTORY = 20
 
-# ================== TELEGRAM APP ==================
-app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-bot = Bot(token=TELEGRAM_TOKEN)
-
+# ================= TELEGRAM =================
 async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if not user or user.id != OWNER_ID:
         await update.message.reply_text("❌ Bu bot yopiq.")
         return
 
-    text = update.message.text.strip()
     uid = user.id
+    text = update.message.text.strip()
 
     if uid not in user_memory:
         user_memory[uid] = [SYSTEM_PROMPT]
@@ -64,38 +58,28 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         answer = response.output_text.strip()
         user_memory[uid].append({"role": "assistant", "content": answer})
 
-        # xotirani cheklash
         if len(user_memory[uid]) > MAX_HISTORY:
             user_memory[uid] = [SYSTEM_PROMPT] + user_memory[uid][-MAX_HISTORY:]
 
         await update.message.reply_text(answer)
 
-    except Exception:
+    except Exception as e:
+        print("OpenAI error:", e)
         await update.message.reply_text("❌ Xatolik yuz berdi.")
 
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat))
+def run_bot():
+    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat))
+    app.run_polling()
 
-# ================== FLASK (WEBHOOK) ==================
+# ================= FLASK (Render uchun) =================
 web = Flask(__name__)
 
-@web.route("/", methods=["GET"])
+@web.route("/")
 def home():
     return "Bot ishlayapti ✅"
 
-@web.route("/webhook", methods=["POST"])
-def webhook():
-    update = Update.de_json(request.get_json(force=True), bot)
-    asyncio.get_event_loop().create_task(app.process_update(update))
-    return "ok"
-
-# ================== START ==================
-async def main():
-    await app.initialize()
-    await bot.set_webhook(
-        url=os.getenv("RENDER_EXTERNAL_URL") + "/webhook"
-    )
-    await app.start()
-
+# ================= START =================
 if __name__ == "__main__":
-    asyncio.get_event_loop().create_task(main())
+    threading.Thread(target=run_bot).start()
     web.run(host="0.0.0.0", port=PORT)
